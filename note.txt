@@ -1,0 +1,71 @@
+1. 运行环境
+    硬件配置：浪潮v100，NVIDIA-Tesla-V100 4×16G
+    系统版本：Ubuntu 16.04.4 LTS
+    开发语言：python3.7
+
+2. 运行脚本
+    一键训练脚本：
+        需要训练三个模型，两个检测模型，一个特征提取模型。其中：
+        centernet 训练使用 CenterNet文件夹下的 pretrain_hg_coco.sh在coco数据集上训练。train_hg_kc.sh训练自己打标的数据。
+        cascade 检测模型训练执行./tools/dist_train.sh configs/xz_cascade_mask_rcnn_x101_64x4d_fpn_0928.py 3 --validate --seed 0
+        torchreid 模型使用 torchreid文件夹下的 run_softmax_total_osnet_x_1_0.sh开启训练。
+        具体步骤见模型训练详细说明。
+
+3. 测试脚本
+    启动测试前需创建python3.7环境，安装requirments.txt中的包，将视频文件存放到此工程的videos下
+    一键测试脚本: test.sh 会同时启动main_cascade_0930.py与main_detector_0930.py测试脚本，结果文件存放在工程目录下result/res_20191001目录下。
+
+4. 详细的运行说明
+    算法原理
+        此次比赛多目标跟踪输入是视频，输出是跟踪结果，因此需要将检测算法和跟踪算法结合。我们算法需要用到行人检测算法、
+        行人属性提取算法、多目标跟踪算法。读入视频后提取图像，检测其中的行人。然后将行人图像截取出来提取其特征，
+        多目标跟踪算法综合行人的属性特征及位置特征（图像中行人框
+    的位置）进行两帧图像上目标的关联。其中用到卡尔曼滤波器进行位置预测，匈牙利算法进行多目标优化匹配。
+
+    代码原理
+        检测算法分为两个，分场景进行目标检测。核心代码在Centernet目录和Cascade目录中，Centernet用于检测白天场景（b1，b3,b5），
+        Cascade用于检测晚上等困难场景(b2,b4)。一张图片检测完成后会将结果送入跟踪算法，跟踪算法根据检测的框截取图像，
+        送入行人属性提取模型（torchreid）提取目标特征向量（512维），通过对比两帧图像中目标的特征，形成两帧之间目标距离的
+        矩阵，通过优化算法（匈牙利算法）得出最优的前后帧匹配结果。在输出最终结果时过滤掉部分不动且置信度不高的目标。
+
+    模型
+        下载三个模型（https://pan.baidu.com/s/1drWw2-MGNJ_4f5vUNs0MgQ）并放到工程目录下，指定的子目录下
+    Centernet检测模型：CenterNet/models/centernet_coco_hg_model_best0917.pth 使用：COCO2017训练后再使用自行打标数据进行微调训练。
+    Cascade检测模型：Cascade/models/cascade_epoch_3.pth 使用：COCO2017训练后再使用自行打标数据进行微调训练。
+    torchreid特征提取模型：torchreid/checkpoint/reid_model.pth，使用MOT2015、MOT2016、MOT2017的数据从头进行训练。
+    模型训练代码已经包含在代码文件中。
+
+
+    数据或数据连接
+    检测器训练数据主要有COCO2017目标检测数据集
+    http://images.cocodataset.org/zips/val2017.zip
+    http://images.cocodataset.org/zips/train2017.zip
+    http://images.cocodataset.org/zips/test2017.zip
+    http://images.cocodataset.org/annotations/annotations_trainval2017.zip
+    http://images.cocodataset.org/annotations/stuff_annotations_trainval2017.zip
+    http://images.cocodataset.org/annotations/panoptic_annotations_trainval2017.zip
+    http://images.cocodataset.org/annotations/image_info_test2017.zip
+    torchreid训练数据集
+    https://motchallenge.net/data/2DMOT2015.zip
+    https://motchallenge.net/data/MOT16.zip
+    https://motchallenge.net/data/MOT17.zip
+    自行打标的行人检测数据（开源）
+    https://pan.baidu.com/s/1drWw2-MGNJ_4f5vUNs0MgQ
+
+
+    代码运行说明
+        脚本的执行步骤，模型及提交结果的保存路径
+            安装python3.7，按照requirements.txt中的列表安装相应的包，
+            在linux命令行执行test.sh，等待程序运行完后，在工程目录下的result/res_20191001文件夹下会出现结果（b1.txt,b2.txt....）。
+        运行时间
+            为提高精度，提交结果时使用了多尺度增强测试，cascade模型处理单个视频时间约20分钟，centernet处理单个视频运行时间大约是35分钟。
+            两个进程并行，五个视频总的时间大概是145分钟。
+        模型训练详细说明
+            1.centernet训练详情见子文件夹下CenterNet/README.md，下载相应的数据和预训练模型，按文档配置好路径，切换路径到Centernet文件夹，
+            使用./train_hg_on_drone.sh 开启训练。
+            2.cascade检测模型训练需先安装mmdetection环境，将目录config中的xz_cascade_mask_rcnn_x101_64x4d_fpn_0928.py复制到mmdetection的config中，然后目录切换到
+            mmdetection安装目录下，根据数据存放位置修改训练数据（xz_cascade_mask_rcnn_x101_64x4d_fpn_0928.py中data项）的路径。
+            执行./tools/dist_train.sh configs/xz_cascade_mask_rcnn_x101_64x4d_fpn_0928.py 3 --validate --seed 0，训练到第三个epoch
+            得到最优模型。
+            3.PersonReID代码详情及环境配置方法见https://github.com/KaiyangZhou/deep-person-reid，
+            使用的训练脚本为torchreid文件夹下run_softmax_total_osnet_x_1_0.sh开启训练，经过测试，选择第460个epoch的模型训练结果作为跟踪系统中使用的person reid模型参数

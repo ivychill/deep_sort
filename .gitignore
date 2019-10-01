@@ -1,0 +1,13 @@
+*.avi
+*.pyc
+*.mp4
+logs/
+log/
+*.npy
+a*.txt
+log.txt
+res_*
+201908*
+A_*
+imgs_res
+*.pth

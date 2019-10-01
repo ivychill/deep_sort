@@ -45,6 +45,7 @@ class KCTracker(object):
         self.result = np.array(self.result) # frameid_pid_tlwhc
         if self.use_filter:
             self.result = removeUnMoveLowConfObj(self.result)
+        else:
             self.result = removeSmallOrBigBbox(self.result)
         writeResult(self.result, file_name)
         print('save result:',file_name)

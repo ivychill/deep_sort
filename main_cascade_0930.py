@@ -189,5 +189,5 @@ if __name__ == "__main__":
         det.kc_tracker.saveResult(det.mot_txt_filter)
         end_time = datetime.now()
         print('################### finish :', filename, end_time)
-        print(' cost hour:', (end_time - start_time) / 3600)
+        print(' cost hour:', (end_time - start_time) )
 

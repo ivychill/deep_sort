@@ -99,6 +99,7 @@ ENV/
 *.png
 *.jpg
 *.pyc
+results/
 emb/
 models/
 !src/models

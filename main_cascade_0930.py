@@ -177,12 +177,12 @@ if __name__ == "__main__":
     start_time = datetime.now()
     print('start time:', start_time)
     for filename in video_file_list: #
-        det = Detector(filename, max_cosine_distance=0.2,max_iou_distance=0.7, max_age=30, out_dir='results/res_20191001')
+        det = Detector(filename, max_cosine_distance=0.2,max_iou_distance=0.7, max_age=30, out_dir='results/res_20191007')
         det.save_feature = False
-        det.write_det_txt = False
+        det.write_det_txt = True
         det.use_tracker = True
-        det.write_video = False
-        det.write_bk = False
+        det.write_video = True
+        det.write_bk = True
         print('################### start :', filename)
         det.open(filename)
         det.detect()

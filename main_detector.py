@@ -2,6 +2,12 @@ import os
 import cv2
 import numpy as np
 from datetime import datetime
+import json
+import base64
+from PIL import Image
+from io import BytesIO
+# import msgpack
+from log import logger
 
 # CenterNet
 # 20190821 使用更深的网络 hg105 速度有点慢，在212上0.7帧每秒。
@@ -74,6 +80,21 @@ def makeFile(file_pth):
         os.remove(file_pth)
 
 
+def build_image_msg(ori_im, identities, bboxes):
+    img = Image.fromarray(ori_im)
+    output_buffer = BytesIO()
+    img.save(output_buffer, format='JPEG')
+    binary_data = output_buffer.getvalue()
+    base64_data = base64.b64encode(binary_data)
+    # logger.debug("base64_data: %s" % (base64_data))
+    tracks = []
+    for i, d in enumerate(bboxes):
+        track = {'id': identities[i], 'x': d[0], 'y': d[1], 'w': d[2]-d[0], 'h': d[3]-d[1]}
+        tracks.append(track)
+    msg_dict = {'command': '2', 'image': base64_data.decode('utf-8'), 'track': tracks}
+    message = json.dumps(msg_dict)
+    return message
+
 class Detector(object):
     def __init__(self, opt, min_confidence=0.4, max_cosine_distance=0.2, max_iou_distance=0.7, max_age=30,
                  out_dir='res/'):
@@ -91,16 +112,20 @@ class Detector(object):
                                     max_iou_distance=max_iou_distance, max_age=max_age)
 
         _, filename = os.path.split(opt.vid_path)
-        self.mot_txt = os.path.join(self.out_dir, filename[:-4] + '_ini.txt')
-        self.mot_txt_filter = os.path.join(self.out_dir, filename[:-4] + '.txt')
-        self.mot_txt_bk = os.path.join(self.out_dir, filename[:-4] + '_bk.txt')
-        self.det_txt = os.path.join(self.out_dir, filename[:-4] + '_det.txt')
+
+        model_name = '_centernet_'
+        timestamp = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
+
+        self.mot_txt = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_ini.txt')
+        self.mot_txt_filter = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '.txt')
+        self.mot_txt_bk = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_bk.txt')
+        self.det_txt = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_det.txt')
         makeFile(self.mot_txt)
         makeFile(self.mot_txt_bk)
         makeFile(self.mot_txt_filter)
         makeFile(self.det_txt)
-        self.video_name = os.path.join(self.out_dir, filename[:-4] + '_res.avi')
-        self.features_npy = os.path.join(self.out_dir, filename[:-4] + '_det.npy')
+        self.video_name = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '.webm')
+        self.features_npy = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_det.npy')
         self.save_feature = False
         self.all_features = []
         self.write_det_txt = False
@@ -114,16 +139,11 @@ class Detector(object):
             self.img_dir = os.path.join(self.out_dir + '/' + self.temp_dir, 'imgs')
             os.makedirs(self.img_dir, exist_ok=True)
 
-    def open(self, video_path):
+    def open(self, opt, video_path):
         if opt.input_type == 'webcam':
             self.vdo.open(opt.webcam_ind)
         elif opt.input_type == 'ipcam':
-            # load cam key, secret
-            with open("cam_secret.txt") as f:
-                lines = f.readlines()
-                key = lines[0].strip()
-                secret = lines[1].strip()
-            self.vdo.open(opt.ipcam_url.format(key, secret, opt.ipcam_no))
+            self.vdo.open(opt.ipcam_url)
         else:  # video
             assert os.path.isfile(opt.vid_path), "Error: path error"
             self.vdo.open(opt.vid_path)
@@ -131,10 +151,12 @@ class Detector(object):
         self.im_width = int(self.vdo.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.im_height = int(self.vdo.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = self.vdo.get(cv2.CAP_PROP_FPS)
+        self.frame_count =int(self.vdo.get(cv2.CAP_PROP_FRAME_COUNT))
 
         self.area = 0, 0, self.im_width, self.im_height
         if self.write_video:
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            # fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            fourcc = cv2.VideoWriter_fourcc(*'VP80')
             self.output = cv2.VideoWriter(self.video_name, fourcc, self.fps, (self.im_width, self.im_height))
 
     def saveFeature(self, file_name, np_mat):
@@ -144,12 +166,14 @@ class Detector(object):
         else:
             print('empty! save nothing!')
 
-    def detect(self):
+    def detect(self, video=None, camera=None, pid=None, socket_web=None, socket_scheduler=None):
         xmin, ymin, xmax, ymax = self.area
         frame_no = 0
         avg_fps = 0.0
         # crop_top, crop_left, crop_h, crop_w = 0, 650, 150, 520
         ret, ori_im = self.vdo.read()
+        if (camera is not None) and (not ret):
+            logger.warn("read from camera %s fail" % (camera))
         while ret:
             frame_no += 1
             start = time.time()
@@ -185,6 +209,10 @@ class Detector(object):
                         bbox_xyxy = outputs[:, 1:5]
                         identities = outputs[:, 0]
                         confs = outputs[:, -1]
+                        if camera is not None:
+                            message = build_image_msg(ori_im, identities, bbox_xyxy)
+                            socket_web.send_string(message)
+                            logger.debug("send image message")
                         ori_im = draw_bboxes_conf(ori_im, bbox_xyxy, confs, identities, offset=(xmin, ymin))
                         for i, d in enumerate(bbox_xyxy):
                             with open(self.mot_txt, 'a') as f:
@@ -196,14 +224,26 @@ class Detector(object):
                                     msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.3f\n' % (
                                         frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1], confs[i])
                                     f.write(msg)
+
             else:
                 self.kc_tracker.update(frame_no, bbox_xywhcs, im)
+                logger.debug("no id")
+                if camera is not None:
+                    message = build_image_msg(ori_im, [], [])
+                    socket_web.send_string(message)
+                    logger.debug("send image message")
             end = time.time()
             fps = 1 / (end - start)
             avg_fps += fps
             if frame_no % 100 == 0:
-                print("detect cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no,
-                                                                                           end - t2))
+                print("detect cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no, end - t2))
+                if video is not None:
+                    progress = round(float(frame_no)/self.frame_count, 2)
+                    msg_dict = {'command': '3', 'video': video, 'status': '1', 'progress': str(progress), 'pid': str(pid)}
+                    message = json.dumps(msg_dict)
+                    socket_web.send_string(message)
+                    socket_scheduler.send_string(message)
+                    logger.debug("send status message: %s" % (message))
 
             if self.write_video:
                 self.output.write(ori_im)
@@ -211,11 +251,79 @@ class Detector(object):
                 cv2.imwrite(os.path.join(self.img_dir, '{:06d}.jpg'.format(frame_no)), ori_im)
 
             ret, ori_im = self.vdo.read()
-
+            if (camera is not None) and (not ret):
+                logger.warn("read from camera %s fail" % (camera))
         self.vdo.release()
         if self.save_feature:
             self.saveFeature(self.features_npy, self.all_features)
 
+def process(video, pid, socket_web, socket_scheduler):
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    MODEL_PATH = './CenterNet/models/centernet_coco_hg_model_best0917.pth'  # 0917
+    ARCH = 'hourglass'
+    EXP_ID = 'coco_hg'
+    TASK = 'ctdet'  # or 'multi_pose' for human pose estimation
+    opt = opts().init(
+        '{} --load_model {} --arch {} --exp_id {} --input_res 1024 --resume --flip_test --test_scales 0.75,1,1.25'.format(
+            TASK, MODEL_PATH, ARCH, EXP_ID).split(' '))
+    Dataset = dataset_factory['kc']
+    opt = opts().update_dataset_info_and_set_heads(opt, Dataset)
+    opt.input_type = 'vid'  # for video
+    opt.vis_thresh = 0.4
+    path_dir = './videos'
+    filename = os.path.join(path_dir, video)
+    start_time = datetime.now()
+    print('start time:', start_time)
+    opt.vid_path = filename  #
+    det = Detector(opt, min_confidence=opt.vis_thresh, max_cosine_distance=0.2,
+                   max_iou_distance=0.7, max_age=30, out_dir='videos/results')
+    det.save_feature = False
+    det.write_det_txt = True
+    det.use_tracker = True
+    det.write_video = True
+    det.write_bk = True
+    print('################### start :', filename)
+    det.open(opt, filename)
+    det.detect(video=video, pid=pid, socket_web=socket_web, socket_scheduler=socket_scheduler)
+    det.kc_tracker.saveResult(det.mot_txt_filter)
+    end_time = datetime.now()
+    print('################### finish :', filename, end_time)
+    print(' cost hour:', (end_time - start_time) )
+
+def process_rt(camera, pid, socket_web, socket_scheduler):
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    MODEL_PATH = './CenterNet/models/centernet_coco_hg_model_best0917.pth'  # 0917
+    ARCH = 'hourglass'
+    EXP_ID = 'coco_hg'
+    TASK = 'ctdet'  # or 'multi_pose' for human pose estimation
+    opt = opts().init(
+        '{} --load_model {} --arch {} --exp_id {} --input_res 1024 --resume --flip_test --test_scales 0.75,1,1.25'.format(
+            TASK, MODEL_PATH, ARCH, EXP_ID).split(' '))
+    Dataset = dataset_factory['kc']
+    opt = opts().update_dataset_info_and_set_heads(opt, Dataset)
+    opt.input_type = 'ipcam'  # for camera
+    # TODO: camera
+    opt.ipcam_url = "rtsp://admin:abcd1234@" + camera + ":554"
+    opt.vis_thresh = 0.4
+    path_dir = './videos'
+    filename = os.path.join(path_dir, camera)
+    opt.vid_path = filename
+    start_time = datetime.now()
+    print('start time:', start_time)
+    det = Detector(opt, min_confidence=opt.vis_thresh, max_cosine_distance=0.2,
+                   max_iou_distance=0.7, max_age=30, out_dir='videos/results')
+    det.save_feature = False
+    det.write_det_txt = True
+    det.use_tracker = True
+    det.write_video = True
+    det.write_bk = True
+    print('################### start :', camera)
+    det.open(opt, filename)
+    det.detect(camera=camera, pid=pid, socket_web=socket_web, socket_scheduler=socket_scheduler)
+    # det.kc_tracker.saveResult(det.mot_txt_filter)
+    end_time = datetime.now()
+    print('################### finish :', camera, end_time)
+    print(' cost hour:', (end_time - start_time) )
 
 if __name__ == "__main__":
 
@@ -285,7 +393,7 @@ if __name__ == "__main__":
         det.write_video = True
         det.write_bk = True
         print('################### start :', filename)
-        det.open(filename)
+        det.open(opt, filename)
         det.detect()
         det.kc_tracker.saveResult(det.mot_txt_filter)
         end_time = datetime.now()

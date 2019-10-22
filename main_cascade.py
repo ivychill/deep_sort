@@ -5,7 +5,8 @@ import numpy as np
 import sys
 from Cascade.cascade_detector import CascadeDetector
 from datetime import datetime
-
+import json
+from log import logger
 from mot_track_kc import KCTracker
 from util import COLORS_10, draw_bboxes, draw_bboxes_conf
 
@@ -44,16 +45,21 @@ class Detector(object):
                                     max_iou_distance=max_iou_distance, max_age=max_age)
 
         _, filename = os.path.split(vid_path)
-        self.mot_txt = os.path.join(self.out_dir, filename[:-4] + '_ini.txt')
-        self.mot_txt_filter = os.path.join(self.out_dir, filename[:-4] + '.txt')
-        self.mot_txt_bk = os.path.join(self.out_dir, filename[:-4] + '_bk.txt')
-        self.det_txt = os.path.join(self.out_dir, filename[:-4] + '_det.txt')
+
+        model_name = '_cascade_'
+        timestamp = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
+
+        self.mot_txt = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_ini.txt')
+        self.mot_txt_filter = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '.txt')
+        self.mot_txt_bk = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_bk.txt')
+        self.det_txt = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_det.txt')
         makeFile(self.mot_txt)
         makeFile(self.mot_txt_bk)
         makeFile(self.mot_txt_filter)
         makeFile(self.det_txt)
-        self.video_name = os.path.join(self.out_dir, filename[:-4] + '_res.avi')
-        self.features_npy = os.path.join(self.out_dir, filename[:-4] + '_det.npy')
+
+        self.video_name = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '.webm')
+        self.features_npy = os.path.join(self.out_dir, filename[:-4] + model_name + timestamp + '_det.npy')
         self.save_feature = False
         self.all_features = []
         self.write_det_txt = False
@@ -74,10 +80,12 @@ class Detector(object):
         self.im_width = int(self.vdo.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.im_height = int(self.vdo.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = self.vdo.get(cv2.CAP_PROP_FPS)
+        self.frame_count =int(self.vdo.get(cv2.CAP_PROP_FRAME_COUNT))
 
         self.area = 0, 0, self.im_width, self.im_height
         if self.write_video:
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            # fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            fourcc = cv2.VideoWriter_fourcc(*'VP80')
             self.output = cv2.VideoWriter(self.video_name, fourcc, self.fps, (self.im_width, self.im_height))
 
     def saveFeature(self, file_name, np_mat):
@@ -87,7 +95,7 @@ class Detector(object):
         else:
             print('empty! save nothing!')
 
-    def detect(self):
+    def detect(self, cascade_detector, video=None, pid=None, socket_web=None, socket_scheduler=None):
         xmin, ymin, xmax, ymax = self.area
         frame_no = 0
         avg_fps = 0.0
@@ -144,6 +152,13 @@ class Detector(object):
             avg_fps += fps
             if frame_no % 100 == 0:
                 print("cascade cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no,end - t2))
+                if pid is not None:
+                    progress = round(float(frame_no)/self.frame_count, 2)
+                    msg_dict = {'command': '3', 'video': video, 'status': '1', 'progress': str(progress), 'pid': str(pid)}
+                    message = json.dumps(msg_dict)
+                    socket_web.send_string(message)
+                    socket_scheduler.send_string(message)
+                    logger.debug("send status message: %s" % (message))
 
             if self.write_video:
                 self.output.write(ori_im)
@@ -156,6 +171,28 @@ class Detector(object):
         if self.save_feature:
             self.saveFeature(self.features_npy, self.all_features)
 
+def process(video, pid, socket_web, socket_scheduler):
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    config_py = './Cascade/config/xz_cascade_mask_rcnn_x101_64x4d_fpn_0928.py'
+    checkpoint_file = './Cascade/models/cascade_epoch_3.pth'
+    cascade_detector = CascadeDetector(config_py, checkpoint_file)
+    path_dir = './videos'
+    filename = os.path.join(path_dir, video)
+    start_time = datetime.now()
+    print('start time:', start_time)
+    det = Detector(filename, max_cosine_distance=0.2,max_iou_distance=0.7, max_age=30, out_dir='videos/results')
+    det.save_feature = False
+    det.write_det_txt = True
+    det.use_tracker = True
+    det.write_video = True
+    det.write_bk = True
+    print('################### start :', filename)
+    det.open(filename)
+    det.detect(cascade_detector, video, pid, socket_web, socket_scheduler)
+    det.kc_tracker.saveResult(det.mot_txt_filter)
+    end_time = datetime.now()
+    print('################### finish :', filename, end_time)
+    print(' cost hour:', (end_time - start_time) )
 
 if __name__ == "__main__":
 
@@ -185,7 +222,7 @@ if __name__ == "__main__":
         det.write_bk = True
         print('################### start :', filename)
         det.open(filename)
-        det.detect()
+        det.detect(cascade_detector)
         det.kc_tracker.saveResult(det.mot_txt_filter)
         end_time = datetime.now()
         print('################### finish :', filename, end_time)

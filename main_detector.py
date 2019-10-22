@@ -292,12 +292,15 @@ def process(video, pid, socket_web, socket_scheduler):
 
 def process_rt(camera, pid, socket_web, socket_scheduler):
     # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    MODEL_PATH = './CenterNet/models/centernet_coco_hg_model_best0917.pth'  # 0917
-    ARCH = 'hourglass'
-    EXP_ID = 'coco_hg'
+    # MODEL_PATH = './CenterNet/models/centernet_coco_hg_model_best0917.pth'  # 0917
+    # ARCH = 'hourglass'
+    # EXP_ID = 'coco_hg'
+    MODEL_PATH = './CenterNet/models/dla_best1012.pth'
+    ARCH = 'dla_34'
+    EXP_ID = 'pascal_dla_512'
     TASK = 'ctdet'  # or 'multi_pose' for human pose estimation
     opt = opts().init(
-        '{} --load_model {} --arch {} --exp_id {} --input_res 1024 --resume --flip_test --test_scales 0.75,1,1.25'.format(
+        '{} --load_model {} --arch {} --exp_id {} --input_res 512 --resume --test_scales 1'.format(
             TASK, MODEL_PATH, ARCH, EXP_ID).split(' '))
     Dataset = dataset_factory['kc']
     opt = opts().update_dataset_info_and_set_heads(opt, Dataset)

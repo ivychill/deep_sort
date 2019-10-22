@@ -84,7 +84,7 @@ if __name__ == "__main__":
         os.makedirs(log_dir)
     set_logger(logger, log_dir)
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
     worker_table = workerTable(log_dir)
 
@@ -102,11 +102,16 @@ if __name__ == "__main__":
         msg_dict = json.loads(message)
         # TODO: schedule, queue and wait
         if msg_dict['command'] == '0':
-            p = trackWorkerRt(msg_dict['camera'])
-            p.start()
-            msg_dict.update({'result': '0'})
-            response = json.dumps(msg_dict)
-            scheduler.send_string(response)
+            # TODO: judge repeat
+            pid = worker_table.get_pid(msg_dict)
+            if pid is None:
+                p = trackWorkerRt(msg_dict['camera'])
+                p.start()
+                msg_dict.update({'result': '0'})
+                response = json.dumps(msg_dict)
+                scheduler.send_string(response)
+            else:
+                logger.warn("start camera %s repeatedly" % (msg_dict['camera']))
         elif msg_dict['command'] == '1':
             pid = worker_table.get_pid(msg_dict)
             if pid is not None:

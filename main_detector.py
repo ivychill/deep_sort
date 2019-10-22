@@ -6,7 +6,7 @@ import json
 import base64
 from PIL import Image
 from io import BytesIO
-# import msgpack
+from time import sleep
 from log import logger
 
 # CenterNet
@@ -81,7 +81,8 @@ def makeFile(file_pth):
 
 
 def build_image_msg(ori_im, identities, bboxes):
-    img = Image.fromarray(ori_im)
+    img_rgb = cv2.cvtColor(ori_im, cv2.COLOR_RGB2BGR)
+    img = Image.fromarray(img_rgb)
     output_buffer = BytesIO()
     img.save(output_buffer, format='JPEG')
     binary_data = output_buffer.getvalue()
@@ -94,6 +95,7 @@ def build_image_msg(ori_im, identities, bboxes):
     msg_dict = {'command': '2', 'image': base64_data.decode('utf-8'), 'track': tracks}
     message = json.dumps(msg_dict)
     return message
+
 
 class Detector(object):
     def __init__(self, opt, min_confidence=0.4, max_cosine_distance=0.2, max_iou_distance=0.7, max_age=30,
@@ -175,6 +177,9 @@ class Detector(object):
         if (camera is not None) and (not ret):
             logger.warn("read from camera %s fail" % (camera))
         while ret:
+        # while True:
+        #     if (video is not None) and (not ret):
+        #         break
             frame_no += 1
             start = time.time()
             im = ori_im[ymin:ymax, xmin:xmax]
@@ -196,6 +201,7 @@ class Detector(object):
             else:
                 bbox_xywhcs = []
 
+            # print ("len(bbox_xywhcs): ", len(bbox_xywhcs))
             if len(bbox_xywhcs) > 0:
                 if self.use_tracker:
                     outputs, features = self.kc_tracker.update(frame_no, bbox_xywhcs, im)
@@ -224,6 +230,12 @@ class Detector(object):
                                     msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.3f\n' % (
                                         frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1], confs[i])
                                     f.write(msg)
+                    else:
+                        logger.debug("no id")
+                        if camera is not None:
+                            message = build_image_msg(ori_im, [], [])
+                            socket_web.send_string(message)
+                            logger.debug("send image message")
 
             else:
                 self.kc_tracker.update(frame_no, bbox_xywhcs, im)
@@ -236,7 +248,7 @@ class Detector(object):
             fps = 1 / (end - start)
             avg_fps += fps
             if frame_no % 100 == 0:
-                print("detect cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no, end - t2))
+                logger.debug("detect cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no, end - t2))
                 if video is not None:
                     progress = round(float(frame_no)/self.frame_count, 2)
                     msg_dict = {'command': '3', 'video': video, 'status': '1', 'progress': str(progress), 'pid': str(pid)}
@@ -250,15 +262,19 @@ class Detector(object):
             if self.write_img:
                 cv2.imwrite(os.path.join(self.img_dir, '{:06d}.jpg'.format(frame_no)), ori_im)
 
-            ret, ori_im = self.vdo.read()
+            try:
+                ret, ori_im = self.vdo.read()
+            except Exception as e:
+                logger("Exception: %" % e)
             if (camera is not None) and (not ret):
-                logger.warn("read from camera %s fail" % (camera))
+                logger.warn("read frame: %d from camera %s fail" % (frame_no, camera))
+
         self.vdo.release()
         if self.save_feature:
             self.saveFeature(self.features_npy, self.all_features)
 
 def process(video, pid, socket_web, socket_scheduler):
-    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     MODEL_PATH = './CenterNet/models/centernet_coco_hg_model_best0917.pth'  # 0917
     ARCH = 'hourglass'
     EXP_ID = 'coco_hg'
@@ -278,10 +294,10 @@ def process(video, pid, socket_web, socket_scheduler):
     det = Detector(opt, min_confidence=opt.vis_thresh, max_cosine_distance=0.2,
                    max_iou_distance=0.7, max_age=30, out_dir='videos/results')
     det.save_feature = False
-    det.write_det_txt = True
+    det.write_det_txt = False
     det.use_tracker = True
     det.write_video = True
-    det.write_bk = True
+    det.write_bk = False
     print('################### start :', filename)
     det.open(opt, filename)
     det.detect(video=video, pid=pid, socket_web=socket_web, socket_scheduler=socket_scheduler)

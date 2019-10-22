@@ -64,18 +64,18 @@ cmd_socket.connect(addr)
 
 time.sleep(5)
 
-msg_dict = {'command': '0', 'camera': '10.15.10.4'}
+msg_dict = {'command': '0', 'camera': '10.15.10.9'}
 message = json.dumps(msg_dict)
 cmd_socket.send_string(message)
 logger.debug("send start message: %s" % (message))
 response = cmd_socket.recv()
 logger.debug("receive message: %s" % (response))
-
-time.sleep(30)
-
-msg_dict = {'command': '1', 'camera': '10.15.10.4'}
-message = json.dumps(msg_dict)
-cmd_socket.send_string(message)
-logger.debug("send stop message: %s" % (message))
-response = cmd_socket.recv()
-logger.debug("receive message: %s" % (response))
+#
+# time.sleep(30)
+#
+# msg_dict = {'command': '1', 'camera': '10.15.10.4'}
+# message = json.dumps(msg_dict)
+# cmd_socket.send_string(message)
+# logger.debug("send stop message: %s" % (message))
+# response = cmd_socket.recv()
+# logger.debug("receive message: %s" % (response))

@@ -38,14 +38,14 @@ class trackWorker(Process):
         logger.debug("send status message: %s" % (message))
 
         if self.model == 'centernet':
-            main_detector_0930.process(self.video, self.process_id, self.socket_web, self.socket_scheduler)
+            main_detector.process(self.video, self.process_id, self.socket_web, self.socket_scheduler)
             msg_dict = {'command': '3', 'video': self.video, 'status': '2', 'progress': '1', 'pid': str(self.process_id)}
             message = json.dumps(msg_dict)
             self.socket_web.send_string(message)
             self.socket_scheduler.send_string(message)
             logger.info('send finish message: %s' % (message))
         elif self.model == 'cascade':
-            main_cascade_0930.process(self.video, self.process_id, self.socket_web, self.socket_scheduler)
+            main_cascade.process(self.video, self.process_id, self.socket_web, self.socket_scheduler)
             msg_dict = {'command': '3', 'video': self.video, 'status': '2', 'progress': '1', 'pid': str(self.process_id)}
             message = json.dumps(msg_dict)
             self.socket_web.send_string(message)

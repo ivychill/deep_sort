@@ -6,7 +6,7 @@ import zmq
 import json
 import threading
 from log import *
-from track_worker_rt import trackWorkerRt
+from track_worker_ff import trackWorkerRt
 
 # table structure: pid, camera, status
 class workerTable():
@@ -56,22 +56,13 @@ class workerTable():
                 return int(self.table[index][0])
         return None
 
-    def get_camera_num(self):
-        return len(self.table)
-
-    def get_camera(self):
-        if len(self.table) >= 1:
-            return self.table[0][1]
-        else:
-            return None
-
 class statusThread(threading.Thread):
     def __init__(self, worker_table):
         threading.Thread.__init__(self)
         self.context = zmq.Context()
         # self.status_socket = self.context.socket(zmq.SUB)
         self.status_socket = self.context.socket(zmq.PULL)
-        addr = 'tcp://*:7006'
+        addr = 'tcp://*:8006'
         self.status_socket.bind(addr)
         self.worker_table = worker_table
 
@@ -94,7 +85,6 @@ if __name__ == "__main__":
     set_logger(logger, log_dir)
 
     # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-    push_url = 'rtmp://10.15.10.24:1935/live/show.stream'
 
     worker_table = workerTable(log_dir)
 
@@ -104,7 +94,7 @@ if __name__ == "__main__":
 
     context = zmq.Context()
     scheduler = context.socket(zmq.REP)
-    addr = 'tcp://*:7001'
+    addr = 'tcp://*:8001'
     scheduler.bind(addr)
     while True:
         message = scheduler.recv()
@@ -112,16 +102,14 @@ if __name__ == "__main__":
         msg_dict = json.loads(message)
         # TODO: schedule, queue and wait
         if msg_dict['command'] == '0':
-            if worker_table.get_camera_num() >= 1:
-                msg_dict.update({'result': '1', 'info': worker_table.get_camera()})
+            # TODO: judge repeat
+            pid = worker_table.get_pid(msg_dict)
+            if pid is None:
+                p = trackWorkerRt(msg_dict['camera'])
+                p.start()
             else:
-                pid = worker_table.get_pid(msg_dict)
-                if pid is None:
-                    p = trackWorkerRt(msg_dict['camera'], msg_dict['stat'], push_url)
-                    p.start()
-                else:
-                    logger.warn("start camera %s repeatedly" % (msg_dict['camera']))
-                msg_dict.update({'result': '0', 'url': push_url})
+                logger.warn("start camera %s repeatedly" % (msg_dict['camera']))
+            msg_dict.update({'result': '0'})
             response = json.dumps(msg_dict)
             scheduler.send_string(response)
 
@@ -131,9 +119,11 @@ if __name__ == "__main__":
                 os.kill(pid, signal.SIGKILL)
                 worker_table.delete(msg_dict)
                 worker_table.dump()
+                msg_dict.update({'result': '0'})
+                response = json.dumps(msg_dict)
+                scheduler.send_string(response)
             else:
                 logger.warn('no pid processing camera: %s' % (msg_dict['camera']))
-
-            msg_dict.update({'result': '0', 'url': push_url})
-            response = json.dumps(msg_dict)
-            scheduler.send_string(response)
+                msg_dict.update({'result': '1', 'info': 'not running'})
+                response = json.dumps(msg_dict)
+                scheduler.send_string(response)

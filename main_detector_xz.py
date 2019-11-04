@@ -26,6 +26,7 @@ from datasets.dataset_factory import dataset_factory
 from opts import opts
 
 from mot_track_kc import KCTracker
+from mot_track_simp import Sort as KCTracker
 from util import COLORS_10, draw_bboxes, draw_bboxes_conf
 
 import time
@@ -229,16 +230,16 @@ class Detector(object):
                             socket_web.send_string(message)
                             logger.debug("send image message")
                         ori_im = draw_bboxes_conf(ori_im, bbox_xyxy, confs, identities, offset=(xmin, ymin))
-                        # for i, d in enumerate(bbox_xyxy):
-                        #     with open(self.mot_txt, 'a') as f:
-                        #         msg = '%d,%d,%.2f,%.2f,%.2f,%.2f\n' % (
-                        #             frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1])
-                        #         f.write(msg)
-                        #     if self.write_bk:
-                        #         with open(self.mot_txt_bk, 'a') as f:
-                        #             msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.3f\n' % (
-                        #                 frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1], confs[i])
-                        #             f.write(msg)
+                        for i, d in enumerate(bbox_xyxy):
+                            with open(self.mot_txt, 'a') as f:
+                                msg = '%d,%d,%.2f,%.2f,%.2f,%.2f\n' % (
+                                    frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1])
+                                f.write(msg)
+                            if self.write_bk:
+                                with open(self.mot_txt_bk, 'a') as f:
+                                    msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.3f\n' % (
+                                        frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1], confs[i])
+                                    f.write(msg)
                     else:
                         logger.debug("no id")
                         if camera is not None:
@@ -258,7 +259,6 @@ class Detector(object):
             avg_fps += fps
             if frame_no % 100 == 0:
                 logger.debug("detect cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no, end - t2))
-            if frame_no % 20 == 0:
                 if video is not None:
                     progress = round(float(frame_no)/self.frame_count, 2)
                     msg_dict = {'command': '3', 'video': video, 'status': '1', 'progress': str(progress), 'pid': str(pid)}

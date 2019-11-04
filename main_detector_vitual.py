@@ -4,12 +4,9 @@ import numpy as np
 from datetime import datetime
 import json
 import base64
-import ffmpeg
 from PIL import Image
 from io import BytesIO
 from time import sleep
-import os
-import signal
 from log import logger
 
 # CenterNet
@@ -84,10 +81,9 @@ def makeFile(file_pth):
 
 
 def build_image_msg(camera, ori_im, identities, bboxes):
-    scale = 3.0/4
     img_rgb = cv2.cvtColor(ori_im, cv2.COLOR_RGB2BGR)
     height, width = img_rgb.shape[0:2]
-    img_lr = cv2.resize(img_rgb, (int(width*scale), int(height*scale)))
+    img_lr = cv2.resize(img_rgb, (int(width/2), int(height/2)))
     img = Image.fromarray(img_lr)
     output_buffer = BytesIO()
     img.save(output_buffer, format='JPEG')
@@ -96,10 +92,9 @@ def build_image_msg(camera, ori_im, identities, bboxes):
     # logger.debug("base64_data: %s" % (base64_data))
     tracks = []
     for i, d in enumerate(bboxes):
-        track = {'id': str(int(identities[i])), 'x': str(int(d[0]*scale)), 'y': str(int(d[1]*scale)), 'w': str(int((d[2]-d[0])*scale)), 'h': str(int((d[3]-d[1])*scale))}
+        track = {'id': str(int(identities[i])), 'x': str(int(d[0])), 'y': str(int(d[1])), 'w': str(int(d[2]-d[0])), 'h': str(int(d[3]-d[1]))}
         tracks.append(track)
-
-    logger.debug("tracks: %s" % (tracks))
+    # logger.debug("tracks: %s" % (tracks))
     msg_dict = {'camera':camera, 'command':'2', 'image':base64_data.decode('utf-8'), 'track':tracks}
     message = json.dumps(msg_dict)
     return message
@@ -116,11 +111,13 @@ class Detector(object):
             # os.makedirs(out_dir + '/imgs', exist_ok=True)
 
         # centerNet detector
-        self.detector = detector_factory[self.opt.task](self.opt)
+        # self.detector = detector_factory[self.opt.task](self.opt)
+        self.detector = None
         # self.crop_detector = detector_factory[self.opt.task](crop_opt)
 
-        self.kc_tracker = KCTracker(confidence_l=0.2, confidence_h=0.4,use_filter=True, max_cosine_distance=max_cosine_distance,
-                                    max_iou_distance=max_iou_distance, max_age=max_age)
+        # self.kc_tracker = KCTracker(confidence_l=0.2, confidence_h=0.4,use_filter=True, max_cosine_distance=max_cosine_distance,
+        #                             max_iou_distance=max_iou_distance, max_age=max_age)
+        self.kc_tracker = None
 
         _, filename = os.path.split(self.opt.vid_path)
 
@@ -181,84 +178,91 @@ class Detector(object):
         xmin, ymin, xmax, ymax = self.area
         frame_no = 0
         avg_fps = 0.0
-        crop_top, crop_left, crop_h, crop_w = 0, 650, 150, 520
+        # crop_top, crop_left, crop_h, crop_w = 0, 650, 150, 520
         ret, ori_im = self.vdo.read()
         if (camera is not None) and (not ret):
             logger.warn("read from camera %s fail" % (camera))
-
         while ret:
+        # while True:
+        #     if (video is not None) and (not ret):
+        #         break
             frame_no += 1
             start = time.time()
-            im = ori_im[ymin:ymax, xmin:xmax]
+            # im = ori_im[ymin:ymax, xmin:xmax]
             t1 = time.time()
-
-            results_big = self.detector.run(im)['results'][self.person_id]
-            results = results_big
-
-            if self.write_det_txt:
-                bbox_xyxyc = results
-                if len(results) > 0:
-                    bbox_xyxyc = bbox_xyxyc[bbox_xyxyc[:, 4] > 0.05]
-                    for i, d in enumerate(bbox_xyxyc):
-                        with open(self.det_txt, 'a') as f:
-                            msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f\n' % (
-                                frame_no, -1, d[0], d[1], d[2] - d[0], d[3] - d[1], d[4])
-                            f.write(msg)
+            # results_big = self.detector.run(im)['results'][self.person_id]
+            # results = results_big
+            # if self.write_det_txt:
+            #     bbox_xyxyc = results
+            #     if len(results) > 0:
+            #         bbox_xyxyc = bbox_xyxyc[bbox_xyxyc[:, 4] > 0.05]
+            #         for i, d in enumerate(bbox_xyxyc):
+            #             with open(self.det_txt, 'a') as f:
+            #                 msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f\n' % (
+            #                     frame_no, -1, d[0], d[1], d[2] - d[0], d[3] - d[1], d[4])
+            #                 f.write(msg)
             t2 = time.time()
-            if len(results) > 0:
-                bbox_xywhcs = bbox_to_xywh_cls_conf(results, conf_thresh=0.05)
-            else:
-                bbox_xywhcs = []
+            # if len(results) > 0:
+            #     bbox_xywhcs = bbox_to_xywh_cls_conf(results, conf_thresh=0.05)
+            # else:
+            #     bbox_xywhcs = []
 
             # print ("len(bbox_xywhcs): ", len(bbox_xywhcs))
-            if len(bbox_xywhcs) > 0:
-                if self.use_tracker:
-                    outputs, features = self.kc_tracker.update(frame_no, bbox_xywhcs, im)
-                    if self.save_feature:
-                        if self.all_features is None:
-                            self.all_features = features
-                        else:
-                            self.all_features = np.vstack((self.all_features, features))
+            # if len(bbox_xywhcs) > 0:
+            #     if self.use_tracker:
+            #         outputs, features = self.kc_tracker.update(frame_no, bbox_xywhcs, im)
+            #         if self.save_feature:
+            #             if self.all_features is None:
+            #                 self.all_features = features
+            #             else:
+            #                 self.all_features = np.vstack((self.all_features, features))
+            #
+            #         if len(outputs) > 0:
+            #             bbox_xyxy = outputs[:, 1:5]
+            #             identities = outputs[:, 0]
+            #             confs = outputs[:, -1]
+            #             if camera is not None:
+            #                 message = build_image_msg(camera, ori_im, identities, bbox_xyxy)
+            #                 socket_web.send_string(message)
+            #                 logger.debug("send image message")
+            #             ori_im = draw_bboxes_conf(ori_im, bbox_xyxy, confs, identities, offset=(xmin, ymin))
+            #             for i, d in enumerate(bbox_xyxy):
+            #                 with open(self.mot_txt, 'a') as f:
+            #                     msg = '%d,%d,%.2f,%.2f,%.2f,%.2f\n' % (
+            #                         frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1])
+            #                     f.write(msg)
+            #                 if self.write_bk:
+            #                     with open(self.mot_txt_bk, 'a') as f:
+            #                         msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.3f\n' % (
+            #                             frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1], confs[i])
+            #                         f.write(msg)
+            #         else:
+            #             logger.debug("no id")
+            #             if camera is not None:
+            #                 message = build_image_msg(camera, ori_im, [], [])
+            #                 socket_web.send_string(message)
+            #                 logger.debug("send image message")
+            #
+            # else:
+            #     self.kc_tracker.update(frame_no, bbox_xywhcs, im)
+            #     logger.debug("no id")
+            #     if camera is not None:
+            #         message = build_image_msg(camera, ori_im, [], [])
+            #         socket_web.send_string(message)
+            #         logger.debug("send image message")
 
-                    if len(outputs) > 0:
-                        bbox_xyxy = outputs[:, 1:5]
-                        identities = outputs[:, 0]
-                        confs = outputs[:, -1]
-                        if camera is not None:
-                            message = build_image_msg(camera, ori_im, identities, bbox_xyxy)
-                            socket_web.send_string(message)
-                            logger.debug("send image message")
-                        ori_im = draw_bboxes_conf(ori_im, bbox_xyxy, confs, identities, offset=(xmin, ymin))
-                        # for i, d in enumerate(bbox_xyxy):
-                        #     with open(self.mot_txt, 'a') as f:
-                        #         msg = '%d,%d,%.2f,%.2f,%.2f,%.2f\n' % (
-                        #             frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1])
-                        #         f.write(msg)
-                        #     if self.write_bk:
-                        #         with open(self.mot_txt_bk, 'a') as f:
-                        #             msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.3f\n' % (
-                        #                 frame_no, identities[i], d[0], d[1], d[2] - d[0], d[3] - d[1], confs[i])
-                        #             f.write(msg)
-                    else:
-                        logger.debug("no id")
-                        if camera is not None:
-                            message = build_image_msg(camera, ori_im, [], [])
-                            socket_web.send_string(message)
-                            logger.debug("send image message")
+            # test
+            identities = np.array([1,2,3])
+            bbox_xyxy = np.array([[0,0,300,500],[500,500,600,800],[200,300,300,500]])
+            message = build_image_msg(camera, ori_im, identities, bbox_xyxy)
+            socket_web.send_string(message)
+            # time.sleep(0.05)
 
-            else:
-                self.kc_tracker.update(frame_no, bbox_xywhcs, im)
-                logger.debug("no id")
-                if camera is not None:
-                    message = build_image_msg(camera, ori_im, [], [])
-                    socket_web.send_string(message)
-                    logger.debug("send image message")
             end = time.time()
             fps = 1 / (end - start)
             avg_fps += fps
             if frame_no % 100 == 0:
                 logger.debug("detect cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no, end - t2))
-            if frame_no % 20 == 0:
                 if video is not None:
                     progress = round(float(frame_no)/self.frame_count, 2)
                     msg_dict = {'command': '3', 'video': video, 'status': '1', 'progress': str(progress), 'pid': str(pid)}
@@ -275,7 +279,7 @@ class Detector(object):
             try:
                 ret, ori_im = self.vdo.read()
             except Exception as e:
-                logger.warn("Exception: {}".format(e))
+                logger("Exception: %" % e)
             if (camera is not None) and (not ret):
                 logger.warn("read frame: %d from camera %s fail" % (frame_no, camera))
                 self.vdo.release()
@@ -283,7 +287,6 @@ class Detector(object):
                 ret, ori_im = self.vdo.read()
 
         self.vdo.release()
-
         if self.save_feature:
             self.saveFeature(self.features_npy, self.all_features)
 
@@ -316,7 +319,7 @@ def process(video, pid, socket_web, socket_scheduler):
     det.save_feature = False
     det.write_det_txt = False
     det.use_tracker = True
-    det.write_video = True
+    det.write_video = False
     det.write_bk = False
     print('################### start :', filename)
     det.open(filename)
@@ -337,12 +340,15 @@ def process_rt(camera, pid, socket_web, socket_scheduler):
             TASK, MODEL_PATH, ARCH, EXP_ID).split(' '))
     Dataset = dataset_factory['kc']
     opt = opts().update_dataset_info_and_set_heads(opt, Dataset)
-    opt.input_type = 'ipcam'  # for camera
+    # opt.input_type = 'ipcam'  # for camera
+    opt.input_type = 'vid'  # for camera
+
     # TODO: camera
     opt.ipcam_url = "rtsp://admin:abcd1234@" + camera + ":554"
     opt.vis_thresh = 0.4
     path_dir = './videos'
     filename = os.path.join(path_dir, camera)
+    filename = "./videos/b1.mp4"
     opt.vid_path = filename
     start_time = datetime.now()
     print('start time:', start_time)

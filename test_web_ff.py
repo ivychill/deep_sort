@@ -17,7 +17,7 @@ class statusThread(threading.Thread):
         self.context = zmq.Context()
         # self.status_socket = self.context.socket(zmq.SUB)
         self.status_socket = self.context.socket(zmq.PULL)
-        addr = 'tcp://*:6004'
+        addr = 'tcp://*:8004'
         self.status_socket.bind(addr)
         # Subscribe on everything
         # self.status_socket.setsockopt_string(zmq.SUBSCRIBE, '')
@@ -27,8 +27,8 @@ class statusThread(threading.Thread):
         while True:
             message = self.status_socket.recv()
             msg_dict = json.loads(message)
-            if msg_dict['command'] == '3':
-                logger.debug("recv status message: %s" % (message))
+            if msg_dict['command'] == '2':
+                logger.debug("recv image message")
             else:
                 logger.warn('recv wrong status message: %s' % (message))
 
@@ -59,63 +59,23 @@ logger.info('main thread running...')
 
 context = zmq.Context()
 cmd_socket = context.socket(zmq.REQ)
-addr = 'tcp://127.0.0.1:6001'
+addr = 'tcp://127.0.0.1:8001'
 cmd_socket.connect(addr)
 
 time.sleep(5)
 
-msg_dict = {'command': '0', 'video': 'b1.mp4', 'model': 'centernet'}
+msg_dict = {'command': '0', 'camera': '10.15.10.9'}
 message = json.dumps(msg_dict)
 cmd_socket.send_string(message)
+logger.debug("send start message: %s" % (message))
 response = cmd_socket.recv()
 logger.debug("receive message: %s" % (response))
-
-# time.sleep(1)
-# msg_dict = {'command': '0', 'video': 'b2.mp4', 'model': 'cascade'}
-# message = json.dumps(msg_dict)
-# cmd_socket.send_string(message)
-# response = cmd_socket.recv()
-# logger.debug("receive message: %s" % (response))
-
-# time.sleep(1)
-# msg_dict = {'command': '0', 'video': 'b3.mp4', 'model': 'centernet'}
-# message = json.dumps(msg_dict)
-# cmd_socket.send_string(message)
-# response = cmd_socket.recv()
-# logger.debug("receive message: %s" % (response))
 #
-# time.sleep(1)
-# msg_dict = {'command': '0', 'video': 'b4.mp4', 'model': 'cascade'}
-# message = json.dumps(msg_dict)
-# cmd_socket.send_string(message)
-# response = cmd_socket.recv()
-# logger.debug("receive message: %s" % (response))
+# time.sleep(30)
 #
-# time.sleep(300)
-#
-# msg_dict = {'command': '1', 'video': 'b1.mp4'}
+# msg_dict = {'command': '1', 'camera': '10.15.10.4'}
 # message = json.dumps(msg_dict)
 # cmd_socket.send_string(message)
-# response = cmd_socket.recv()
-# logger.debug("receive message: %s" % (response))
-
-# time.sleep(1)
-# msg_dict = {'command': '1', 'video': 'b2.mp4'}
-# message = json.dumps(msg_dict)
-# cmd_socket.send_string(message)
-# response = cmd_socket.recv()
-# logger.debug("receive message: %s" % (response))
-
-# time.sleep(1)
-# msg_dict = {'command': '1', 'video': 'b3.mp4'}
-# message = json.dumps(msg_dict)
-# cmd_socket.send_string(message)
-# response = cmd_socket.recv()
-# logger.debug("receive message: %s" % (response))
-#
-# time.sleep(1)
-# msg_dict = {'command': '1', 'video': 'b4.mp4'}
-# message = json.dumps(msg_dict)
-# cmd_socket.send_string(message)
+# logger.debug("send stop message: %s" % (message))
 # response = cmd_socket.recv()
 # logger.debug("receive message: %s" % (response))

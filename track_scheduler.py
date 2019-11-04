@@ -116,11 +116,16 @@ if __name__ == "__main__":
         msg_dict = json.loads(message)
         # TODO: schedule, queue and wait
         if msg_dict['command'] == '0':
-            p = trackWorker(msg_dict['video'], msg_dict['model'])
-            p.start()
+            pid = worker_table.get_pid(msg_dict)
+            if pid is None:
+                p = trackWorker(msg_dict['video'], msg_dict['model'])
+                p.start()
+            else:
+                logger.warn("start video %s repeatedly" % (msg_dict['video']))
             msg_dict.update({'result': '0'})
             response = json.dumps(msg_dict)
             scheduler.send_string(response)
+
         elif msg_dict['command'] == '1':
             pid = worker_table.get_pid(msg_dict)
             if pid is not None:
@@ -132,6 +137,7 @@ if __name__ == "__main__":
                 scheduler.send_string(response)
             else:
                 logger.warn('no pid processing video: %s' % (msg_dict['video']))
-                msg_dict.update({'result': '1', 'info': 'not running'})
+                msg_dict.update({'result': '0'})
+                # msg_dict.update({'result': '1', 'info': 'not running'})
                 response = json.dumps(msg_dict)
                 scheduler.send_string(response)

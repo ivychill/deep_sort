@@ -4,11 +4,13 @@ import numpy as np
 from datetime import datetime
 import json
 import base64
+import msgpack
 import ffmpeg
 from PIL import Image
 from io import BytesIO
 from time import sleep
-import os
+import re
+import subprocess
 import signal
 from log import logger
 
@@ -25,7 +27,8 @@ from detectors.detector_factory import detector_factory
 from datasets.dataset_factory import dataset_factory
 from opts import opts
 
-from mot_track_kc import KCTracker
+# from mot_track_kc import KCTracker
+from mot_track_simp import Sort as KCTracker
 from util import COLORS_10, draw_bboxes, draw_bboxes_conf
 
 import time
@@ -83,28 +86,6 @@ def makeFile(file_pth):
         os.remove(file_pth)
 
 
-def build_image_msg(camera, ori_im, identities, bboxes):
-    scale = 3.0/4
-    img_rgb = cv2.cvtColor(ori_im, cv2.COLOR_RGB2BGR)
-    height, width = img_rgb.shape[0:2]
-    img_lr = cv2.resize(img_rgb, (int(width*scale), int(height*scale)))
-    img = Image.fromarray(img_lr)
-    output_buffer = BytesIO()
-    img.save(output_buffer, format='JPEG')
-    binary_data = output_buffer.getvalue()
-    base64_data = base64.b64encode(binary_data)
-    # logger.debug("base64_data: %s" % (base64_data))
-    tracks = []
-    for i, d in enumerate(bboxes):
-        track = {'id': str(int(identities[i])), 'x': str(int(d[0]*scale)), 'y': str(int(d[1]*scale)), 'w': str(int((d[2]-d[0])*scale)), 'h': str(int((d[3]-d[1])*scale))}
-        tracks.append(track)
-
-    logger.debug("tracks: %s" % (tracks))
-    msg_dict = {'camera':camera, 'command':'2', 'image':base64_data.decode('utf-8'), 'track':tracks}
-    message = json.dumps(msg_dict)
-    return message
-
-
 class Detector(object):
     def __init__(self, opt, min_confidence=0.4, max_cosine_distance=0.2, max_iou_distance=0.7, max_age=30,
                  out_dir='res/'):
@@ -119,8 +100,9 @@ class Detector(object):
         self.detector = detector_factory[self.opt.task](self.opt)
         # self.crop_detector = detector_factory[self.opt.task](crop_opt)
 
-        self.kc_tracker = KCTracker(confidence_l=0.2, confidence_h=0.4,use_filter=True, max_cosine_distance=max_cosine_distance,
-                                    max_iou_distance=max_iou_distance, max_age=max_age)
+        # self.kc_tracker = KCTracker(confidence_l=0.2, confidence_h=0.4,use_filter=True, max_cosine_distance=max_cosine_distance,
+        #                             max_iou_distance=max_iou_distance, max_age=max_age)
+        self.kc_tracker = KCTracker()
 
         _, filename = os.path.split(self.opt.vid_path)
 
@@ -159,10 +141,50 @@ class Detector(object):
             assert os.path.isfile(self.opt.vid_path), "Error: path error"
             self.vdo.open(self.opt.vid_path)
 
-        self.im_width = int(self.vdo.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.im_height = int(self.vdo.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.im_width = int(self.vdo.get(cv2.CAP_PROP_FRAME_WIDTH))     # 1920
+        self.im_height = int(self.vdo.get(cv2.CAP_PROP_FRAME_HEIGHT))   # 1080
         self.fps = self.vdo.get(cv2.CAP_PROP_FPS)
         self.frame_count =int(self.vdo.get(cv2.CAP_PROP_FRAME_COUNT))
+        logger.debug('self.im_width: {}, self.im_height: {}'.format(self.im_width, self.im_height))
+        # if self.opt.input_type == 'ipcam':
+        #     self.process_in = (
+        #         ffmpeg
+        #             .input(self.opt.ipcam_url, ss=0, stimeout=str(2*1000000), rtsp_transport='tcp', vcodec='h264_cuvid')
+        #             .output('pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format(self.im_width, self.im_height))
+        #             .run_async(pipe_stdout=True, pipe_stderr=True)
+        #     )
+
+        # self.process_out = (
+        #     ffmpeg
+        #         .input('pipe:', format='rawvideo', pix_fmt='rgb24', s='{}x{}'.format(self.im_width, self.im_height))
+        #         .output(self.opt.push_url, vcodec='h264_nvenc', f='flv', g='0', video_bitrate='20M', tune='zerolatency')
+        #         .overwrite_output()
+        #         .run_async(pipe_stdin=True)
+        # )
+
+        command = ['ffmpeg',
+                   '-re',
+                   '-y', '-an',
+                   '-f', 'rawvideo',
+                   '-vcodec', 'rawvideo',
+                   '-pix_fmt', 'bgr24',
+                   '-s', '{}x{}'.format(self.im_width, self.im_height),
+                   '-r', '25',  # 5
+                   '-i', '-',
+                   '-g', '0',
+                   '-b:v', '10M',  # 2
+                   '-c:v', 'h264_nvenc',
+                   # '-pix_fmt', 'yuv420p',
+                   # '-preset', 'ultrafast',
+                   # '-s','1920x1080',#1920 1080
+                   '-tune', 'zerolatency',
+                   '-f', 'flv',
+                   self.opt.push_url]
+
+        self.pipe = subprocess.Popen(command
+                         , shell=False
+                         , stdin=subprocess.PIPE
+                         )
 
         self.area = 0, 0, self.im_width, self.im_height
         if self.write_video:
@@ -181,16 +203,23 @@ class Detector(object):
         xmin, ymin, xmax, ymax = self.area
         frame_no = 0
         avg_fps = 0.0
-        crop_top, crop_left, crop_h, crop_w = 0, 650, 150, 520
+        # crop_top, crop_left, crop_h, crop_w = 0, 650, 150, 520
         ret, ori_im = self.vdo.read()
         if (camera is not None) and (not ret):
             logger.warn("read from camera %s fail" % (camera))
+        # ori_im = self.process_in.stdout.read(self.im_width * self.im_height * 3)
+        # self.process_in.stdout.flush()
+        # if len(ori_im) <= 0:
+        #     logger.warn("read from camera %s fail" % (camera))
 
         while ret:
+        # while len(ori_im) > 0:
+        #     ori_im = np.frombuffer(ori_im, dtype='uint8')
+        #     ori_im = ori_im.reshape(self.im_height, self.im_width, 3)
+
             frame_no += 1
             start = time.time()
             im = ori_im[ymin:ymax, xmin:xmax]
-            t1 = time.time()
 
             results_big = self.detector.run(im)['results'][self.person_id]
             results = results_big
@@ -204,13 +233,14 @@ class Detector(object):
                             msg = '%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f\n' % (
                                 frame_no, -1, d[0], d[1], d[2] - d[0], d[3] - d[1], d[4])
                             f.write(msg)
-            t2 = time.time()
+
             if len(results) > 0:
                 bbox_xywhcs = bbox_to_xywh_cls_conf(results, conf_thresh=0.05)
             else:
                 bbox_xywhcs = []
 
-            # print ("len(bbox_xywhcs): ", len(bbox_xywhcs))
+            track_start = time.time()
+
             if len(bbox_xywhcs) > 0:
                 if self.use_tracker:
                     outputs, features = self.kc_tracker.update(frame_no, bbox_xywhcs, im)
@@ -224,10 +254,6 @@ class Detector(object):
                         bbox_xyxy = outputs[:, 1:5]
                         identities = outputs[:, 0]
                         confs = outputs[:, -1]
-                        if camera is not None:
-                            message = build_image_msg(camera, ori_im, identities, bbox_xyxy)
-                            socket_web.send_string(message)
-                            logger.debug("send image message")
                         ori_im = draw_bboxes_conf(ori_im, bbox_xyxy, confs, identities, offset=(xmin, ymin))
                         # for i, d in enumerate(bbox_xyxy):
                         #     with open(self.mot_txt, 'a') as f:
@@ -241,24 +267,22 @@ class Detector(object):
                         #             f.write(msg)
                     else:
                         logger.debug("no id")
-                        if camera is not None:
-                            message = build_image_msg(camera, ori_im, [], [])
-                            socket_web.send_string(message)
-                            logger.debug("send image message")
 
             else:
                 self.kc_tracker.update(frame_no, bbox_xywhcs, im)
-                logger.debug("no id")
-                if camera is not None:
-                    message = build_image_msg(camera, ori_im, [], [])
-                    socket_web.send_string(message)
-                    logger.debug("send image message")
+
+            if camera is not None:
+                time_before = time.time()
+                # self.process_out.stdin.write(ori_im .astype(np.uint8).tobytes())
+                self.pipe.stdin.write(ori_im.tostring())
+                time_after = time.time()
+                # logger.debug('push rmtp cost {} s'.format(time_after - time_before))
+
             end = time.time()
             fps = 1 / (end - start)
             avg_fps += fps
             if frame_no % 100 == 0:
-                logger.debug("detect cost time: {}s, fps: {}, frame_no : {} track cost:{}".format(end - start, fps, frame_no, end - t2))
-            if frame_no % 20 == 0:
+                logger.debug("frame_no {} detect cost {}s, fps {}, track cost {}s".format(frame_no, end-start, fps, end-track_start))
                 if video is not None:
                     progress = round(float(frame_no)/self.frame_count, 2)
                     msg_dict = {'command': '3', 'video': video, 'status': '1', 'progress': str(progress), 'pid': str(pid)}
@@ -272,18 +296,54 @@ class Detector(object):
             if self.write_img:
                 cv2.imwrite(os.path.join(self.img_dir, '{:06d}.jpg'.format(frame_no)), ori_im)
 
+            time_before = time.time()
             try:
+                self.vdo.read()
                 ret, ori_im = self.vdo.read()
             except Exception as e:
                 logger.warn("Exception: {}".format(e))
-            if (camera is not None) and (not ret):
-                logger.warn("read frame: %d from camera %s fail" % (frame_no, camera))
+            index = 0
+            while not ret:
+                logger.warn("read frame: %d from camera %s fail No. %d" % (frame_no, camera, index))
                 self.vdo.release()
                 self.vdo.open(self.opt.ipcam_url)
+                self.vdo.read()
                 ret, ori_im = self.vdo.read()
+                index += 1
+            time_after = time.time()
+            # logger.debug('read a frame from camera cost {} s'.format(time_after - time_before))
 
+            # time_before = time.time()
+            # # send 1 out of 2
+            # self.process_in.stdout.read(self.im_width * self.im_height * 3)
+            # ori_im = self.process_in.stdout.read(self.im_width * self.im_height * 3)
+            # self.process_in.stdout.flush()
+            # time_after = time.time()
+            # # logger.debug('read a frame from camera cost {} s'.format(time_after - time_before))
+            # index = 0
+            # while len(ori_im) <= 0:
+            #     logger.warn("read frame: %d from camera %s fail No. %d" % (frame_no, camera, index))
+            #     os.kill(self.process_in.pid, signal.SIGTERM)
+            #     logger.warn("restart ffmpeg")
+            #     time_before = time.time()
+            #     self.process_in = (
+            #         ffmpeg
+            #             .input(self.opt.ipcam_url, ss=0, stimeout=str(2*1000000), rtsp_transport='tcp', vcodec='h264_cuvid')
+            #             .output('pipe:', format='rawvideo', pix_fmt='rgb24',
+            #                     s='{}x{}'.format(self.im_width, self.im_height))
+            #             .run_async(pipe_stdout=True, pipe_stderr=True)
+            #     )
+            #     time_after = time.time()
+            #     logger.debug('restart ffmpeg cost {} s'.format(time_after - time_before))
+            #     self.process_in.stdout.read(self.im_width * self.im_height * 3)
+            #     ori_im = self.process_in.stdout.read(self.im_width * self.im_height * 3)
+            #     index += 1
+
+        # if self.opt.input_type == 'ipcam':
+        #     os.kill(self.process_in.pid, signal.SIGTERM)
+        # else:
         self.vdo.release()
-
+        self.pipe.terminate()
         if self.save_feature:
             self.saveFeature(self.features_npy, self.all_features)
 
@@ -326,8 +386,8 @@ def process(video, pid, socket_web, socket_scheduler):
     print('################### finish :', filename, end_time)
     print(' cost hour:', (end_time - start_time) )
 
-def process_rt(camera, pid, socket_web, socket_scheduler):
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+def process_rt(camera, push_url, stat, pid, socket_web, socket_scheduler):
+    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
     MODEL_PATH = './CenterNet/models/dla_best1012.pth'
     ARCH = 'dla_34'
     EXP_ID = 'pascal_dla_512'
@@ -340,6 +400,8 @@ def process_rt(camera, pid, socket_web, socket_scheduler):
     opt.input_type = 'ipcam'  # for camera
     # TODO: camera
     opt.ipcam_url = "rtsp://admin:abcd1234@" + camera + ":554"
+    opt.push_url = push_url
+    opt.stat = stat
     opt.vis_thresh = 0.4
     path_dir = './videos'
     filename = os.path.join(path_dir, camera)
@@ -356,7 +418,7 @@ def process_rt(camera, pid, socket_web, socket_scheduler):
     print('################### start :', camera)
     det.open(filename)
     det.detect(camera=camera, pid=pid, socket_web=socket_web, socket_scheduler=socket_scheduler)
-    # det.kc_tracker.saveResult(det.mot_txt_filter)
+    det.kc_tracker.saveResult(det.mot_txt_filter)
     end_time = datetime.now()
     print('################### finish :', camera, end_time)
     print(' cost hour:', (end_time - start_time) )
@@ -431,7 +493,7 @@ if __name__ == "__main__":
         print('################### start :', filename)
         det.open(filename)
         det.detect()
-        det.kc_tracker.saveResult(det.mot_txt_filter)
+        # det.kc_tracker.saveResult(det.mot_txt_filter)
         end_time = datetime.now()
         print('################### finish :', filename, end_time)
         print(' cost hour:', (end_time - start_time) )
